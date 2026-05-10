@@ -1,102 +1,68 @@
+import asyncio
 import json
+import logging
 import os
 import random
-import asyncio
 from datetime import datetime
-from telegram import Update, Bot
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
-import logging
+
+from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-IKLASS_TOKEN = os.getenv("IKLASS_TOKEN")
-ABDUL_TOKEN = os.getenv("ABDUL_TOKEN")
-NOTIFY_CHAT_ID = os.getenv("NOTIFY_CHAT_ID")  # Your personal Telegram chat ID
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+IKLASS_SESSION = os.getenv("IKLASS_SESSION")
+ABDUL_SESSION = os.getenv("ABDUL_SESSION")
+NOTIFY_CHAT_ID = int(os.getenv("NOTIFY_CHAT_ID", "0"))
 
-TARGET_GROUPS = {
-    "PrimeClubOFM": -1001854701169,
-    "ofmjobs": -1001891392293,
-    "ofmpros": -1002501290895,
-}
+TARGET_GROUPS = [
+    -1001854701169,  # PrimeClubOFM
+    -1001891392293,  # ofmjobs
+    -1002501290895,  # ofmpros
+]
 
 EMPLOYER_KEYWORDS = [
-    "HIRING",
-    "we need",
-    "we are looking",
-    "we are seeking",
-    "we're looking",
-    "we're seeking",
-    "looking for",
-    "seeking a",
-    "need a",
-    "need an",
-    "recruitment",
-    "job opening",
-    "position available",
-    "open position",
-    "requirements:",
-    "responsibilities:",
-    "details:",
-    "location:",
-    "payment:",
-    "salary:",
-    "compensation:",
-    "dm me",
-    "dm us",
-    "apply now",
-    "send your",
+    "hiring", "we need", "we are looking", "we are seeking",
+    "we're looking", "we're seeking", "looking for", "seeking a",
+    "need a", "need an", "recruitment", "job opening", "position available",
+    "open position", "requirements:", "responsibilities:", "details:",
+    "location:", "payment:", "salary:", "compensation:",
+    "dm me", "dm us", "apply now", "send your",
 ]
 
 SKILL_KEYWORDS = [
-    "AI content",
-    "AI model",
-    "Kling AI",
-    "Kling",
-    "CapCut",
-    "Nano Banana",
-    "Freepik",
-    "Wavespeed",
-    "Higgsfield",
-    "Comfy UI",
-    "content creator",
-    "content operator",
-    "video editing",
-    "visual storytelling",
-    "AI tools",
-    "creative",
+    "AI content", "AI model", "Kling AI", "Kling", "CapCut",
+    "Nano Banana", "Freepik", "Wavespeed", "Higgsfield", "Comfy UI",
+    "content creator", "content operator", "video editing",
+    "visual storytelling", "AI tools", "creative",
 ]
 
 IKLASS_VARIANTS = [
-    """Hey! Just saw your post about the AI content operator role. I've got 2 years doing \
-similar work with Kling and other tools. Keen to apply if you're still hiring.
+    """Hey! Just saw your post about the AI content operator role. I've got 2 years doing similar work with Kling and other tools. Keen to apply if you're still hiring.
 
 Cheers,
 Iklass""",
-    """Hi! Interested in the AI content role. I've got solid 2 years experience with \
-Kling AI and video editing. Would love to chat about this opportunity.
+    """Hi! Interested in the AI content role. I've got solid 2 years experience with Kling AI and video editing. Would love to chat about this opportunity.
 
 Talk soon,
 Iklass""",
-    """Just came across your hiring post. I've been creating AI content for 2 years now, \
-pretty familiar with Kling and similar tools. Let's see if we're a good fit!
+    """Just came across your hiring post. I've been creating AI content for 2 years now, pretty familiar with Kling and similar tools. Let's see if we're a good fit!
 
 Iklass""",
 ]
 
 ABDUL_VARIANTS = [
-    """Hey! Saw your posting for the content creator role. Been in the AI content space \
-for 2 years, comfortable with Kling and video editing. Interested!
+    """Hey! Saw your posting for the content creator role. Been in the AI content space for 2 years, comfortable with Kling and video editing. Interested!
 
 Cheers,
 Abdul""",
-    """Hi there! Your AI content role caught my attention. 2 years experience with video \
-creation and AI tools. Would be great to discuss further.
+    """Hi there! Your AI content role caught my attention. 2 years experience with video creation and AI tools. Would be great to discuss further.
 
 Best,
 Abdul""",
-    """Just found your job post. I'm a content creator with 2 years in the AI space, \
-familiar with Kling and the whole workflow. Let's connect!
+    """Just found your job post. I'm a content creator with 2 years in the AI space, familiar with Kling and the whole workflow. Let's connect!
 
 Abdul""",
 ]
@@ -142,45 +108,28 @@ def log_sent_application(poster_id, account, message_text, status):
     json.dump(apps, open(path, "w"), indent=2)
 
 
-async def notify_owner(text):
+async def notify_owner(iklass_client, text):
     if not NOTIFY_CHAT_ID:
         return
     try:
-        async with Bot(IKLASS_TOKEN) as bot:
-            await bot.send_message(chat_id=NOTIFY_CHAT_ID, text=text)
+        await iklass_client.send_message(NOTIFY_CHAT_ID, text)
     except Exception as e:
-        logger.error(f"Failed to send owner notification: {e}")
+        logger.error(f"Failed to notify owner: {e}")
 
 
-async def try_send(bot: Bot, chat_id, username, message):
-    """Try sending by user ID first, fall back to @username if privacy blocks it."""
-    try:
-        await bot.send_message(chat_id=chat_id, text=message)
-        return True
-    except Exception as e:
-        if ("Forbidden" in str(e) or "blocked" in str(e).lower()) and username:
-            try:
-                await bot.send_message(chat_id=f"@{username}", text=message)
-                return True
-            except Exception:
-                pass
-        raise
-
-
-async def send_messages(poster_id, poster_name, poster_username):
+async def send_messages(iklass_client, abdul_client, poster_id, poster_name, notify):
     global last_sent_to
 
     if poster_id in last_sent_to:
         logger.info(f"Already sent to {poster_id}, skipping")
-        await notify_owner(f"Job Hunter: Skipped {poster_name} — already messaged them before.")
+        await notify(f"Job Hunter: Skipped {poster_name} — already messaged them before.")
         return
 
     iklass_message = random.choice(IKLASS_VARIANTS)
     abdul_message = random.choice(ABDUL_VARIANTS)
 
     try:
-        async with Bot(IKLASS_TOKEN) as iklass_bot:
-            await try_send(iklass_bot, poster_id, poster_username, iklass_message)
+        await iklass_client.send_message(poster_id, iklass_message)
         log_sent_application(poster_id, "Iklass", iklass_message, "success")
         logger.info(f"Iklass sent to {poster_name} ({poster_id})")
 
@@ -188,72 +137,67 @@ async def send_messages(poster_id, poster_name, poster_username):
         logger.info(f"Waiting {delay}s before Abdul sends...")
         await asyncio.sleep(delay)
 
-        async with Bot(ABDUL_TOKEN) as abdul_bot:
-            await try_send(abdul_bot, poster_id, poster_username, abdul_message)
+        await abdul_client.send_message(poster_id, abdul_message)
         log_sent_application(poster_id, "Abdul", abdul_message, "success")
         logger.info(f"Abdul sent to {poster_name} ({poster_id})")
 
         last_sent_to.add(poster_id)
 
     except Exception as e:
-        if "Forbidden" in str(e) or "blocked" in str(e).lower():
-            msg = (
-                f"Privacy block — could not DM {poster_name}"
-                + (f" (@{poster_username})" if poster_username else f" (ID: {poster_id})")
-                + "\nThey have DMs restricted. You may need to reach out manually."
-            )
-            logger.warning(msg)
-            log_sent_application(poster_id, "Both", "Blocked by privacy settings", "blocked")
-            await notify_owner(f"Job Hunter Alert\n\n{msg}")
-        else:
-            msg = f"Error sending to {poster_name} ({poster_id}): {e}"
-            logger.error(msg)
-            log_sent_application(poster_id, "Both", "Failed", "failed")
-            await notify_owner(f"Job Hunter Error\n\n{msg}")
+        msg = f"Error sending to {poster_name} ({poster_id}): {e}"
+        logger.error(msg)
+        log_sent_application(poster_id, "Both", "Failed", "failed")
+        await notify(f"Job Hunter Error\n\n{msg}")
 
 
-async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE):
+async def main():
     global last_match_time
 
-    if not update.message or update.message.chat.type not in ["group", "supergroup"]:
-        return
+    iklass_client = TelegramClient(StringSession(IKLASS_SESSION), API_ID, API_HASH)
+    abdul_client = TelegramClient(StringSession(ABDUL_SESSION), API_ID, API_HASH)
 
-    message_text = update.message.text or ""
-    poster_id = update.message.from_user.id
-    poster_name = update.message.from_user.first_name or "Unknown"
-    poster_username = update.message.from_user.username  # None if they have no @username
-    group_name = update.message.chat.title
+    await iklass_client.start()
+    await abdul_client.start()
 
-    current_time = datetime.now().timestamp()
-    cooldown_remaining = 600 - (current_time - last_match_time)
-    if cooldown_remaining > 0:
-        logger.info(f"Rate limit active, {int(cooldown_remaining)}s remaining")
-        await notify_owner(f"Job Hunter: Skipped post in {group_name} — rate limit active ({int(cooldown_remaining)}s left)\n\nPost: {message_text[:100]}")
-        return
-
-    if not is_employer_post(message_text):
-        return
-
-    if not has_skill_match(message_text):
-        return
-
-    logger.info(f"MATCH FOUND in {group_name}! Poster: {poster_name} ({poster_id})")
-    await notify_owner(f"Job Hunter: Match found in {group_name}!\n\nPoster: {poster_name}" + (f" (@{poster_username})" if poster_username else "") + f"\n\nPost: {message_text[:200]}")
-    log_matched_job(poster_id, message_text, group_name)
-    last_match_time = current_time
-    await send_messages(poster_id, poster_name, poster_username)
-
-
-def main():
     logger.info("Job Hunter Bot starting...")
-    logger.info(f"Monitoring: {list(TARGET_GROUPS.keys())}")
+    logger.info(f"Monitoring {len(TARGET_GROUPS)} groups")
 
-    app = Application.builder().token(IKLASS_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    async def notify(text):
+        await notify_owner(iklass_client, text)
 
-    logger.info("Bot is running!")
-    app.run_polling()
+    @iklass_client.on(events.NewMessage(chats=TARGET_GROUPS))
+    async def handle_message(event):
+        global last_match_time
+
+        message_text = event.message.text or ""
+        poster_id = event.sender_id
+        sender = await event.get_sender()
+        poster_name = getattr(sender, "first_name", None) or "Unknown"
+        chat = await event.get_chat()
+        group_name = getattr(chat, "title", "Unknown Group")
+
+        current_time = datetime.now().timestamp()
+        cooldown_remaining = 600 - (current_time - last_match_time)
+        if cooldown_remaining > 0:
+            logger.info(f"Rate limit active, {int(cooldown_remaining)}s remaining")
+            await notify(f"Job Hunter: Skipped post in {group_name} — rate limit active ({int(cooldown_remaining)}s left)\n\nPost: {message_text[:100]}")
+            return
+
+        if not is_employer_post(message_text):
+            return
+
+        if not has_skill_match(message_text):
+            return
+
+        logger.info(f"MATCH FOUND in {group_name}! Poster: {poster_name} ({poster_id})")
+        await notify(f"Job Hunter: Match found in {group_name}!\n\nPoster: {poster_name}\n\nPost: {message_text[:200]}")
+        log_matched_job(poster_id, message_text, group_name)
+        last_match_time = current_time
+        await send_messages(iklass_client, abdul_client, poster_id, poster_name, notify)
+
+    logger.info("Listening for job posts...")
+    await iklass_client.run_until_disconnected()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
