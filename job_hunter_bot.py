@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 IKLASS_TOKEN = os.getenv("IKLASS_TOKEN")
 ABDUL_TOKEN = os.getenv("ABDUL_TOKEN")
+NOTIFY_CHAT_ID = os.getenv("NOTIFY_CHAT_ID")  # Your personal Telegram chat ID
 
 TARGET_GROUPS = {
     "PrimeClubOFM": -1001854701169,
@@ -141,7 +142,32 @@ def log_sent_application(poster_id, account, message_text, status):
     json.dump(apps, open(path, "w"), indent=2)
 
 
-async def send_messages(poster_id, poster_name):
+async def notify_owner(text):
+    if not NOTIFY_CHAT_ID:
+        return
+    try:
+        async with Bot(IKLASS_TOKEN) as bot:
+            await bot.send_message(chat_id=NOTIFY_CHAT_ID, text=text)
+    except Exception as e:
+        logger.error(f"Failed to send owner notification: {e}")
+
+
+async def try_send(bot: Bot, chat_id, username, message):
+    """Try sending by user ID first, fall back to @username if privacy blocks it."""
+    try:
+        await bot.send_message(chat_id=chat_id, text=message)
+        return True
+    except Exception as e:
+        if ("Forbidden" in str(e) or "blocked" in str(e).lower()) and username:
+            try:
+                await bot.send_message(chat_id=f"@{username}", text=message)
+                return True
+            except Exception:
+                pass
+        raise
+
+
+async def send_messages(poster_id, poster_name, poster_username):
     global last_sent_to
 
     if poster_id in last_sent_to:
@@ -153,7 +179,7 @@ async def send_messages(poster_id, poster_name):
 
     try:
         async with Bot(IKLASS_TOKEN) as iklass_bot:
-            await iklass_bot.send_message(chat_id=poster_id, text=iklass_message)
+            await try_send(iklass_bot, poster_id, poster_username, iklass_message)
         log_sent_application(poster_id, "Iklass", iklass_message, "success")
         logger.info(f"Iklass sent to {poster_name} ({poster_id})")
 
@@ -162,15 +188,27 @@ async def send_messages(poster_id, poster_name):
         await asyncio.sleep(delay)
 
         async with Bot(ABDUL_TOKEN) as abdul_bot:
-            await abdul_bot.send_message(chat_id=poster_id, text=abdul_message)
+            await try_send(abdul_bot, poster_id, poster_username, abdul_message)
         log_sent_application(poster_id, "Abdul", abdul_message, "success")
         logger.info(f"Abdul sent to {poster_name} ({poster_id})")
 
         last_sent_to.add(poster_id)
 
     except Exception as e:
-        logger.error(f"Error sending to {poster_id}: {e}")
-        log_sent_application(poster_id, "Both", "Failed", "failed")
+        if "Forbidden" in str(e) or "blocked" in str(e).lower():
+            msg = (
+                f"Privacy block — could not DM {poster_name}"
+                + (f" (@{poster_username})" if poster_username else f" (ID: {poster_id})")
+                + "\nThey have DMs restricted. You may need to reach out manually."
+            )
+            logger.warning(msg)
+            log_sent_application(poster_id, "Both", "Blocked by privacy settings", "blocked")
+            await notify_owner(f"Job Hunter Alert\n\n{msg}")
+        else:
+            msg = f"Error sending to {poster_name} ({poster_id}): {e}"
+            logger.error(msg)
+            log_sent_application(poster_id, "Both", "Failed", "failed")
+            await notify_owner(f"Job Hunter Error\n\n{msg}")
 
 
 async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE):
@@ -182,6 +220,7 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text or ""
     poster_id = update.message.from_user.id
     poster_name = update.message.from_user.first_name or "Unknown"
+    poster_username = update.message.from_user.username  # None if they have no @username
     group_name = update.message.chat.title
 
     current_time = datetime.now().timestamp()
@@ -197,7 +236,7 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"MATCH FOUND in {group_name}! Poster: {poster_name} ({poster_id})")
     log_matched_job(poster_id, message_text, group_name)
     last_match_time = current_time
-    await send_messages(poster_id, poster_name)
+    await send_messages(poster_id, poster_name, poster_username)
 
 
 def main():
