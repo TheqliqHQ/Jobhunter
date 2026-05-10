@@ -172,6 +172,7 @@ async def send_messages(poster_id, poster_name, poster_username):
 
     if poster_id in last_sent_to:
         logger.info(f"Already sent to {poster_id}, skipping")
+        await notify_owner(f"Job Hunter: Skipped {poster_name} — already messaged them before.")
         return
 
     iklass_message = random.choice(IKLASS_VARIANTS)
@@ -224,7 +225,10 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     group_name = update.message.chat.title
 
     current_time = datetime.now().timestamp()
-    if current_time - last_match_time < 600:
+    cooldown_remaining = 600 - (current_time - last_match_time)
+    if cooldown_remaining > 0:
+        logger.info(f"Rate limit active, {int(cooldown_remaining)}s remaining")
+        await notify_owner(f"Job Hunter: Skipped post in {group_name} — rate limit active ({int(cooldown_remaining)}s left)\n\nPost: {message_text[:100]}")
         return
 
     if not is_employer_post(message_text):
@@ -234,6 +238,7 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info(f"MATCH FOUND in {group_name}! Poster: {poster_name} ({poster_id})")
+    await notify_owner(f"Job Hunter: Match found in {group_name}!\n\nPoster: {poster_name}" + (f" (@{poster_username})" if poster_username else "") + f"\n\nPost: {message_text[:200]}")
     log_matched_job(poster_id, message_text, group_name)
     last_match_time = current_time
     await send_messages(poster_id, poster_name, poster_username)
