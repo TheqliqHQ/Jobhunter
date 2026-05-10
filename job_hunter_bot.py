@@ -23,6 +23,33 @@ TARGET_GROUPS = [
     -1002501290895,  # ofmpros
 ]
 
+JOB_SEEKER_KEYWORDS = [
+    "looking for work",
+    "looking for a job",
+    "looking for job",
+    "seeking work",
+    "seeking a job",
+    "seeking employment",
+    "open to work",
+    "open to opportunities",
+    "available for",
+    "available to work",
+    "i am a",
+    "i'm a",
+    "hire me",
+    "portfolio",
+    "my work",
+    "my experience",
+    "years of experience",
+    "please dm me",
+    "please contact me",
+    "reach out to me",
+    "i can do",
+    "i do ",
+    "i offer",
+    "my services",
+]
+
 EMPLOYER_KEYWORDS = [
     "hiring", "we need", "we are looking", "we are seeking",
     "we're looking", "we're seeking", "looking for", "seeking a",
@@ -69,6 +96,11 @@ Abdul""",
 
 last_match_time = 0
 last_sent_to = set()
+
+
+def is_job_seeker_post(text):
+    lower = text.lower()
+    return any(k.lower() in lower for k in JOB_SEEKER_KEYWORDS)
 
 
 def is_employer_post(text):
@@ -182,6 +214,10 @@ async def main():
         if cooldown_remaining > 0:
             logger.info(f"Rate limit active, {int(cooldown_remaining)}s remaining")
             await notify(f"Job Hunter: Skipped post in {group_name} — rate limit active ({int(cooldown_remaining)}s left)\n\nPost: {message_text[:100]}")
+            return
+
+        if is_job_seeker_post(message_text):
+            logger.info("Skipping — job seeker post")
             return
 
         if not is_employer_post(message_text):
