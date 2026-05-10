@@ -162,9 +162,6 @@ async def main():
     logger.info("Job Hunter Bot starting...")
     logger.info(f"Monitoring {len(TARGET_GROUPS)} groups")
 
-    # Wake up Telegram update stream (required on cloud servers)
-    await iklass_client.get_dialogs()
-    logger.info("Update stream ready")
 
     async def notify(text):
         await notify_owner(iklass_client, text)
