@@ -21,11 +21,19 @@ TARGET_GROUPS = {
 
 EMPLOYER_KEYWORDS = [
     "HIRING",
+    "we need",
+    "we are looking",
     "we are seeking",
     "we're looking",
+    "we're seeking",
+    "looking for",
+    "seeking a",
+    "need a",
+    "need an",
     "recruitment",
     "job opening",
     "position available",
+    "open position",
     "requirements:",
     "responsibilities:",
     "details:",
@@ -33,6 +41,10 @@ EMPLOYER_KEYWORDS = [
     "payment:",
     "salary:",
     "compensation:",
+    "dm me",
+    "dm us",
+    "apply now",
+    "send your",
 ]
 
 SKILL_KEYWORDS = [
