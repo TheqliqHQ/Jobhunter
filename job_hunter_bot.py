@@ -195,7 +195,21 @@ async def main():
         last_match_time = current_time
         await send_messages(iklass_client, abdul_client, poster_id, poster_name, notify)
 
+    await notify(f"Job Hunter is online and listening!")
     logger.info("Listening for job posts...")
+
+    @iklass_client.on(events.NewMessage)
+    async def debug_all(event):
+        try:
+            chat = await event.get_chat()
+            chat_id = getattr(chat, "id", None)
+            chat_title = getattr(chat, "title", "Private/Unknown")
+            text = (event.message.text or "")[:80]
+            logger.info(f"MSG in [{chat_id}] {chat_title}: {text}")
+            await notify(f"DEBUG — Message in [{chat_id}] {chat_title}:\n{text}")
+        except Exception as e:
+            logger.error(f"Debug handler error: {e}")
+
     await iklass_client.run_until_disconnected()
 
 
