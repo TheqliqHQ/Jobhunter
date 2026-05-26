@@ -97,8 +97,28 @@ Abdul""",
 Abdul""",
 ]
 
+COOLDOWN_DAYS = 7
 last_match_time = 0
-last_sent_to = set()
+contacted_employers = {}  # poster_id -> last messaged datetime
+
+
+def load_contacted_employers():
+    global contacted_employers
+    if os.path.exists("contacted_employers.json"):
+        raw = json.load(open("contacted_employers.json"))
+        contacted_employers = {int(k): datetime.fromisoformat(v) for k, v in raw.items()}
+
+
+def save_contacted_employers():
+    raw = {str(k): v.isoformat() for k, v in contacted_employers.items()}
+    json.dump(raw, open("contacted_employers.json", "w"), indent=2)
+
+
+def can_message_employer(poster_id):
+    if poster_id not in contacted_employers:
+        return True
+    days_since = (datetime.now() - contacted_employers[poster_id]).days
+    return days_since >= COOLDOWN_DAYS
 
 
 def has_skill_keyword(text):
@@ -177,11 +197,13 @@ async def notify_owner(iklass_client, text):
 
 
 async def send_messages(iklass_client, abdul_client, poster_id, poster_name, notify):
-    global last_sent_to
+    global contacted_employers
 
-    if poster_id in last_sent_to:
-        logger.info(f"Already sent to {poster_id}, skipping")
-        await notify(f"Job Hunter: Skipped {poster_name} — already messaged them before.")
+    if not can_message_employer(poster_id):
+        days_since = (datetime.now() - contacted_employers[poster_id]).days
+        msg = f"Skipped {poster_name} — messaged {days_since} day(s) ago (cooldown: {COOLDOWN_DAYS} days)"
+        logger.info(msg)
+        await notify(f"Job Hunter: {msg}")
         return
 
     iklass_message = random.choice(IKLASS_VARIANTS)
@@ -200,7 +222,8 @@ async def send_messages(iklass_client, abdul_client, poster_id, poster_name, not
         log_sent_application(poster_id, "Abdul", abdul_message, "success")
         logger.info(f"Abdul sent to {poster_name} ({poster_id})")
 
-        last_sent_to.add(poster_id)
+        contacted_employers[poster_id] = datetime.now()
+        save_contacted_employers()
 
     except Exception as e:
         msg = f"Error sending to {poster_name} ({poster_id}): {e}"
@@ -214,6 +237,8 @@ async def main():
 
     iklass_client = TelegramClient(StringSession(IKLASS_SESSION), API_ID, API_HASH)
     abdul_client = TelegramClient(StringSession(ABDUL_SESSION), API_ID, API_HASH)
+
+    load_contacted_employers()
 
     await iklass_client.start()
     await abdul_client.start()
