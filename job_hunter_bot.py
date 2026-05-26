@@ -5,6 +5,7 @@ import os
 import random
 from datetime import datetime
 
+import anthropic
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -16,6 +17,8 @@ API_HASH = os.getenv("API_HASH")
 IKLASS_SESSION = os.getenv("IKLASS_SESSION")
 ABDUL_SESSION = os.getenv("ABDUL_SESSION")
 NOTIFY_CHAT_ID = int(os.getenv("NOTIFY_CHAT_ID", "0"))
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 TARGET_GROUPS = [
     -1001854701169,  # PrimeClubOFM
@@ -98,14 +101,38 @@ last_match_time = 0
 last_sent_to = set()
 
 
-def is_job_seeker_post(text):
+def has_skill_keyword(text):
     lower = text.lower()
-    return any(k.lower() in lower for k in JOB_SEEKER_KEYWORDS)
+    return any(k.lower() in lower for k in SKILL_KEYWORDS)
 
 
 def is_employer_post(text):
     lower = text.lower()
     return any(k.lower() in lower for k in EMPLOYER_KEYWORDS)
+
+
+async def is_employer_post_ai(text):
+    """Use Claude to confirm this is an employer posting a vacancy, not a job seeker."""
+    try:
+        response = ai_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=10,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Is this Telegram message from an EMPLOYER posting a job vacancy, "
+                    "or from a JOB SEEKER looking for work?\n\n"
+                    f"Message: {text[:500]}\n\n"
+                    "Reply with only one word: EMPLOYER or SEEKER"
+                )
+            }]
+        )
+        result = response.content[0].text.strip().upper()
+        logger.info(f"AI classification: {result}")
+        return result == "EMPLOYER"
+    except Exception as e:
+        logger.error(f"AI classification failed: {e}")
+        return is_employer_post(text)
 
 
 def has_skill_match(text):
@@ -216,14 +243,11 @@ async def main():
             await notify(f"Job Hunter: Skipped post in {group_name} — rate limit active ({int(cooldown_remaining)}s left)\n\nPost: {message_text[:100]}")
             return
 
-        if is_job_seeker_post(message_text):
-            logger.info("Skipping — job seeker post")
+        if not has_skill_keyword(message_text):
             return
 
-        if not is_employer_post(message_text):
-            return
-
-        if not has_skill_match(message_text):
+        if not await is_employer_post_ai(message_text):
+            logger.info("Skipping — AI classified as job seeker post")
             return
 
         logger.info(f"MATCH FOUND in {group_name}! Poster: {poster_name} ({poster_id})")
