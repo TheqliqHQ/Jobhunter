@@ -132,7 +132,9 @@ def is_employer_post(text):
 
 
 async def is_employer_post_ai(text):
-    """Use Claude to confirm this is an employer posting a vacancy, not a job seeker."""
+    if not ANTHROPIC_API_KEY:
+        logger.error("ANTHROPIC_API_KEY not set — skipping message to avoid false positives")
+        return False
     try:
         response = ai_client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -141,7 +143,9 @@ async def is_employer_post_ai(text):
                 "role": "user",
                 "content": (
                     "Is this Telegram message from an EMPLOYER posting a job vacancy, "
-                    "or from a JOB SEEKER looking for work?\n\n"
+                    "or from a JOB SEEKER looking for work? "
+                    "An employer post offers a role and asks people to apply. "
+                    "A job seeker post describes their own skills and asks for work.\n\n"
                     f"Message: {text[:500]}\n\n"
                     "Reply with only one word: EMPLOYER or SEEKER"
                 )
@@ -151,8 +155,8 @@ async def is_employer_post_ai(text):
         logger.info(f"AI classification: {result}")
         return result == "EMPLOYER"
     except Exception as e:
-        logger.error(f"AI classification failed: {e}")
-        return is_employer_post(text)
+        logger.error(f"AI classification failed: {e} — skipping to avoid false positives")
+        return False
 
 
 def has_skill_match(text):
@@ -209,6 +213,10 @@ async def send_messages(iklass_client, abdul_client, poster_id, poster_name, not
     iklass_message = random.choice(IKLASS_VARIANTS)
     abdul_message = random.choice(ABDUL_VARIANTS)
 
+    # Mark as contacted immediately so any duplicate triggers during the delay are blocked
+    contacted_employers[poster_id] = datetime.now()
+    save_contacted_employers()
+
     try:
         await iklass_client.send_message(poster_id, iklass_message)
         log_sent_application(poster_id, "Iklass", iklass_message, "success")
@@ -221,9 +229,6 @@ async def send_messages(iklass_client, abdul_client, poster_id, poster_name, not
         await abdul_client.send_message(poster_id, abdul_message)
         log_sent_application(poster_id, "Abdul", abdul_message, "success")
         logger.info(f"Abdul sent to {poster_name} ({poster_id})")
-
-        contacted_employers[poster_id] = datetime.now()
-        save_contacted_employers()
 
     except Exception as e:
         msg = f"Error sending to {poster_name} ({poster_id}): {e}"
